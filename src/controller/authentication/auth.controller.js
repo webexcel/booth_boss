@@ -1,63 +1,83 @@
 import responseCode from "../../../constants/responseCode.js";
 import createKnexInstance from "../../..//configs/db.js";
 import { generateAccessToken } from "../../middleware/auth.middleware.js";
-import { logger } from '../../../configs/winston.js'
+import { logger } from "../../../configs/winston.js";
+import message from "../../../constants/messages.js";
+import errorStatus from "../../../constants/responseCode.js";
+import bcrypt from 'bcrypt';
 
 export const login = async (req, res, next) => {
   let knex = null;
   try {
-    const { user_name, password } = req.body;
+    const { email, password } = req.body;
 
     logger.info("User is trying to Login", {
-      username: user_name,
-      reqdetails: "login"
+      username: email,
+      reqdetails: "login",
     });
 
-    if (!user_name || !password) {
-      return res.status(400);
+    if (!email || !password) {
+      return res.status(errorStatus?.FAILURE?.BAD_REQUEST).json({
+        status: false,
+        message: message?.MANDATORY_ERROR,
+      });
     }
 
-    knex = await createKnexInstance("admin_webexcel");
+    knex = await createKnexInstance("election");
 
-    const loginData = await knex("employee")
-      .select("emp_id", "emp_name", "admin")
-      .where({
-        email: user_name,
-        Password: password,
-      });
+    const user = await knex("users")
+      .select("id as employee_id", "full_name as name", "email", "phone", "password_hash")
+      .where({ email, "is_active": "1" })
+      .first();
 
-    if (loginData.length > 0) {
-      logger.info(" Found user details in the Database", {
-        username: user_name,
-        reqdetails: "login"
-      });
-
-      const { emp_name, emp_id, admin } = loginData[0];
-      const user = { "dbname": "admin_webexcel", "user_name": emp_name };
-      const userdata = { emp_name, emp_id, admin };
-
-      const token = generateAccessToken(user);
-
-      logger.info(" Logged in Successfully", {
-        username: user_name,
-        reqdetails: "login"
-      });
-      return res.status(responseCode.SUCCESS).json({
-        status: true,
-        message: "Login Successfully",
-        token: token,
-        userdata
-      });
-    } else {
-      logger.info("Login Failed due to incorrect credentials", {
-        username: user_name,
-        reqdetails: "login"
-      });
+    if (!user) {
+      logger.info("Login Failed: Invalid Username", { username: email, reqdetails: "login" });
       return res.status(responseCode.FAILURE.DATA_NOT_FOUND).json({
         status: false,
-        message: "Incorrect username or password",
+        message: "Invalid Username",
       });
     }
+
+    const { employee_id, name, email: userEmail, password_hash: storedPassword } = user;
+
+    let isMatch = false;
+    let needsUpdate = false;
+
+    if (storedPassword.startsWith("$2b$")) {
+      // If password is already hashed, compare using bcrypt
+      isMatch = await bcrypt.compare(password, storedPassword);
+    } else {
+      // If password is in plain text, compare directly
+      isMatch = password === storedPassword;
+      needsUpdate = isMatch;
+    }
+
+    if (!isMatch) {
+      logger.info("Login Failed: Incorrect Password", { username: email, reqdetails: "login" });
+      return res.status(responseCode.FAILURE.DATA_NOT_FOUND).json({
+        status: false,
+        message: "Incorrect Password",
+      });
+    }
+
+    logger.info("Logged in Successfully", { username: email, reqdetails: "login" });
+
+    // 🔹 If password was plain text, hash and update it after successful login
+    if (needsUpdate) {
+      const hashedPassword = await bcrypt.hash(password, 10);
+      await knex("election").where({ email }).update({ password_hash: hashedPassword });
+      logger.info("Password updated to bcrypt hash for better security", { username: email });
+    }
+
+    const token = generateAccessToken({ employee_id, email: userEmail, name, user_name: name, dbname: "election" });
+
+    return res.status(responseCode.SUCCESS).json({
+      status: true,
+      message: "Login Successfully",
+      token,
+      userdata: { employee_id, email: userEmail, name },
+    });
+
   } catch (error) {
     next(error);
   } finally {
@@ -65,4 +85,4 @@ export const login = async (req, res, next) => {
       await knex.destroy();
     }
   }
-}
+};

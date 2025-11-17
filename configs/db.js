@@ -2,7 +2,7 @@ import knex from 'knex';
 
 const createKnexInstance = (dbname) => {
 
-    const db = dbname || 'boothdb';
+    const db = dbname || 'election';
 
     const knexInstance = knex({
         client: 'mysql2',
