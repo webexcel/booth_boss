@@ -212,26 +212,6 @@ export const editVoter = async (req, res, next) => {
             });
         }
 
-        // const updateResult = await knex("voters")
-        //     .update({
-        //         constituency_id,
-        //         block_id,
-        //         booth_id,
-        //         part_id,
-        //         voter_id,
-        //         name,
-        //         father_husband_name,
-        //         age,
-        //         gender,
-        //         house_no,
-        //         address,
-        //         phone,
-        //         email,
-        //         polling_station,
-        //         notes
-        //     })
-        //     .where({ id });
-
         let updateResult;
 
         if (key == "photo" && value.startsWith('data:image/')) {
@@ -517,7 +497,6 @@ export const voterBulkUpload = async (req, res, next) => {
             });
         }
 
-        // Prepare data
         const finalInsertData = insertData.map((i) => ({
             constituency_id: i.constituency_id,
             block_id: i.block_id,
@@ -537,7 +516,6 @@ export const voterBulkUpload = async (req, res, next) => {
             notes: i.notes || null,
         }));
 
-        // Insert using transaction
         const trx = await knex.transaction();
 
         try {
@@ -551,7 +529,6 @@ export const voterBulkUpload = async (req, res, next) => {
 
                 const voterIds = chunk.map(v => v.voter_id);
 
-                // Fetch existing voters with status
                 const existingRows = await trx("voters")
                     .select("voter_id", "is_active")
                     .whereIn("voter_id", voterIds);
@@ -567,25 +544,18 @@ export const voterBulkUpload = async (req, res, next) => {
                     const voterId = String(row.voter_id);
 
                     if (existingMap.has(voterId)) {
-                        // Exists in DB
                         const isActive = existingMap.get(voterId);
 
                         if (isActive === 0) {
-                            // Mark for reactivation
                             rowsToReactivate.push(voterId);
                         } else {
-                            // Already active -> skip
                             skippedActive++;
                         }
                     } else {
-                        // New voter -> insert
                         rowsToInsert.push(row);
                     }
                 }
 
-                // -----------------------------
-                // 1️⃣ Reactivate inactive voters
-                // -----------------------------
                 if (rowsToReactivate.length > 0) {
                     await trx("voters")
                         .whereIn("voter_id", rowsToReactivate)
@@ -594,9 +564,6 @@ export const voterBulkUpload = async (req, res, next) => {
                     reactivatedCount += rowsToReactivate.length;
                 }
 
-                // -----------------------------
-                // 2️⃣ Insert new voters
-                // -----------------------------
                 if (rowsToInsert.length > 0) {
                     await trx("voters").insert(rowsToInsert);
                     insertedCount += rowsToInsert.length;
@@ -621,7 +588,6 @@ export const voterBulkUpload = async (req, res, next) => {
                 error: dbErr.message
             });
         }
-
     } catch (error) {
         logger.error("Error in voter bulk upload", {
             error: error.message,
