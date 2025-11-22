@@ -71,13 +71,57 @@ export const login = async (req, res, next) => {
 
     const token = generateAccessToken({ employee_id, email: userEmail, name, user_name: name, dbname: "election" });
 
+    await knex("users").update({ "token": token }).where("email", email);
+
     return res.status(responseCode.SUCCESS).json({
       status: true,
-      message: "Login Successfully",
+      message: "Logged-in Successfully",
       token,
       userdata: { employee_id, email: userEmail, name },
     });
+  } catch (error) {
+    next(error);
+  } finally {
+    if (knex) {
+      await knex.destroy();
+    }
+  }
+};
 
+export const getRegisteredToken = async (req, res, next) => {
+  let knex = null;
+  try {
+    const { user_id } = req.body;
+
+    logger.info("User is trying to Login", {
+      username: user_id,
+      reqdetails: "login",
+    });
+
+    if (!user_id) {
+      return res.status(errorStatus?.FAILURE?.BAD_REQUEST).json({
+        status: false,
+        message: "User ID is Mandatory",
+      });
+    }
+
+    knex = await createKnexInstance("election");
+
+    const tokenRes = await knex("users").select("token").where({ "id": user_id }).first();
+
+    if (tokenRes) {
+      return res.status(200).json({
+        status: true,
+        message: "Token Fetched Successfully",
+        token: tokenRes.token,
+      });
+    } else {
+      return res.status(400).json({
+        status: true,
+        message: "No Token Found",
+        token: null
+      });
+    }
   } catch (error) {
     next(error);
   } finally {

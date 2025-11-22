@@ -72,3 +72,6 @@ CHANGE COLUMN `template_schema` `template_schema` JSON NULL ;
 
 ALTER TABLE `election`.`voters` 
 ADD COLUMN `photo` TEXT NULL DEFAULT NULL AFTER `father_husband_name`;
+
+ALTER TABLE `election`.`users` 
+ADD COLUMN `token` TEXT NULL DEFAULT NULL AFTER `is_active`;
