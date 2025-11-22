@@ -168,8 +168,6 @@ export const editBlocks = async (req, res, next) => {
             });
         }
 
-        const oldType = exists.att_type;
-
         const updateResult = await knex("blocks")
             .update({
                 constituency_id: con_id,

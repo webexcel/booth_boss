@@ -1,74 +1,73 @@
 import createKnexInstance from "../../../configs/db.js";
 import { logger } from "../../../configs/winston.js";
 
-export const getBooths = async (req, res, next) => {
+export const getSurveyTemplate = async (req, res, next) => {
     let knex = null;
     try {
         const { dbname, user_name } = req.user;
 
-        logger.info("Booths list Request Received", {
+        logger.info("Survey list Request Received", {
             username: user_name,
-            reqdetails: "booths-getBooths",
+            reqdetails: "survey-getSurvey",
         });
 
         knex = await createKnexInstance(dbname);
 
-        const result = await knex('booths')
-            .leftJoin('blocks', 'booths.block_id', 'blocks.id')
-            .select('booths.id', 'booths.block_id', 'blocks.name', 'booths.code', 'booths.name', 'booths.location_point')
-            .where({ 'booths.status': '0' });
+        const result = await knex('survey_templates')
+            .select('id', 'code', 'title', 'description')
+            .where({ 'active': '1' });
 
         if (result && result.length > 0) {
-            logger.info("Booths list retrieved successfully", {
+            logger.info("Survey list retrieved successfully", {
                 username: user_name,
-                reqdetails: "booths-getBooths",
+                reqdetails: "survey-getSurvey",
             });
             return res.status(200).json({
-                message: "Booths list retrieved successfully",
+                message: "Survey list retrieved successfully",
                 data: result,
                 status: true,
             });
         } else {
-            logger.warn("No Booths list found", {
+            logger.warn("No Survey list found", {
                 username: user_name,
-                reqdetails: "booths-getBooths",
+                reqdetails: "survey-getSurvey",
             });
             return res.status(400).json({
-                message: "No Booths list found",
+                message: "No Survey list found",
                 status: false,
                 data: [],
             });
         }
     } catch (err) {
-        logger.error("Error fetching Booths list", {
+        logger.error("Error fetching Survey list", {
             error: err.message,
             stack: err.stack,
             username: req.user?.user_name,
-            reqdetails: "booths-getBooths",
+            reqdetails: "survey-getSurvey",
         });
         next(err);
     } finally {
         if (knex) {
-            await knex.destroy();
+            knex.destroy();
         }
     }
 };
 
-export const addBooths = async (req, res, next) => {
+export const addSurveyTemplate = async (req, res, next) => {
     let knex = null;
     try {
-        const { block_id, code, name, loc_point } = req.body;
+        const { code, name, description } = req.body;
         const { dbname, user_name } = req.user;
 
-        logger.info("Add Booths Request Received", {
+        logger.info("Add Survey Request Received", {
             username: user_name,
-            reqdetails: "booths-addBooths",
+            reqdetails: "survey-addSurvey",
         });
 
-        if (!block_id || !code || !name) {
+        if (!code || !name) {
             logger.error("Mandatory fields are missing", {
                 username: user_name,
-                reqdetails: "booths-addBooths",
+                reqdetails: "survey-addSurvey",
             });
             return res.status(400).json({
                 message: "Mandatory fields are missing",
@@ -76,23 +75,16 @@ export const addBooths = async (req, res, next) => {
             });
         }
 
-        if (!Array.isArray(loc_point) || loc_point.length === 0) {
-            loc_point = [0, 0];
-        } else if (loc_point.length === 1) {
-            loc_point.push(0);
-        }
-
         knex = await createKnexInstance(dbname);
 
-        const exists = await knex('booths')
-            .select('*')
-            .where({ block_id: block_id, code, name, status: '0' })
+        const exists = await knex('survey_templates')
+            .where({ code: code, active: "1", title: name })
             .first();
 
         if (exists) {
             logger.warn("Duplicate Entry detected", {
                 username: user_name,
-                reqdetails: "booths-addBooths",
+                reqdetails: "survey-addSurvey",
             });
             return res.status(400).json({
                 message: "Duplicate Entry detected",
@@ -100,35 +92,44 @@ export const addBooths = async (req, res, next) => {
             });
         }
 
-        const insertResult = await knex('booths')
+        const existing = await knex("survey_templates")
+            .where({ code })
+            .first();
+
+        if (existing) {
+            return res.status(400).json({
+                message: "Code already exists. Please use a different code."
+            });
+        }
+
+        const insertResult = await knex('survey_templates')
             .insert({
-                block_id: block_id,
                 code: code,
-                name: name,
-                location_point: (loc_point[0] === 0 && loc_point[1] === 0) ? null : knex.raw("POINT(?, ?)", [loc_point[0], loc_point[1]])
+                title: name,
+                description
             });
 
         if (insertResult) {
-            logger.info("Booths inserted successfully", {
+            logger.info("Survey inserted successfully", {
                 username: user_name,
-                reqdetails: "booths-addBooths",
+                reqdetails: "survey-addSurvey",
             });
             return res.status(200).json({
-                message: "Booths inserted successfully",
+                message: "Survey inserted successfully",
                 status: true,
             });
         } else {
-            logger.error("Failed to insert Booths", {
+            logger.error("Failed to insert Survey", {
                 username: user_name,
-                reqdetails: "booths-addBooths",
+                reqdetails: "survey-addSurvey",
             });
             return res.status(500).json({
-                message: "Failed to insert Booths",
+                message: "Failed to insert Survey",
                 status: false,
             });
         }
     } catch (error) {
-        console.error("Error inserting Booths:", error);
+        console.error("Error inserting Survey:", error);
         next(error);
     } finally {
         if (knex) {
@@ -137,21 +138,21 @@ export const addBooths = async (req, res, next) => {
     }
 };
 
-export const editBooths = async (req, res, next) => {
+export const editSurveyTemplate = async (req, res, next) => {
     let knex = null;
     try {
-        const { id, block_id, code, name, loc_point } = req.body;
+        const { id, code, name, description } = req.body;
         const { dbname, user_name } = req.user;
 
-        logger.info("Edit Booths Request Received", {
+        logger.info("Edit Survey Request Received", {
             username: user_name,
-            reqdetails: "booths-editBooths",
+            reqdetails: "survey-editSurvey",
         });
 
-        if (!id || !block_id || !code || !name) {
-            logger.error("Mandatory fields are missing for Edit Booths", {
+        if (!id || !code || !name) {
+            logger.error("Mandatory fields are missing for Edit Survey", {
                 username: user_name,
-                reqdetails: "booths-editBooths",
+                reqdetails: "survey-editSurvey",
             });
             return res.status(400).json({
                 message: "Mandatory fields are missing",
@@ -159,23 +160,16 @@ export const editBooths = async (req, res, next) => {
             });
         }
 
-        if (!Array.isArray(loc_point) || loc_point.length === 0) {
-            loc_point = [0, 0];
-        } else if (loc_point.length === 1) {
-            loc_point.push(0);
-        }
-
         knex = await createKnexInstance(dbname);
 
-        const exists = await knex('booths')
-            .select('*')
-            .where({ id: id, status: "0" })
+        const exists = await knex('survey_templates')
+            .where({ id: id, active: "1" })
             .first();
 
         if (!exists) {
             logger.warn("No Data Found!", {
                 username: user_name,
-                reqdetails: "booths-editBooths",
+                reqdetails: "survey-editSurvey",
             });
             return res.status(400).json({
                 message: "No Data Found!",
@@ -183,36 +177,46 @@ export const editBooths = async (req, res, next) => {
             });
         }
 
-        const updateResult = await knex("booths")
+        const existing = await knex("survey_templates")
+            .where({ code })
+            .whereNot({ id })
+            .first();
+
+        if (existing) {
+            return res.status(400).json({
+                message: "Code already exists. Please use a different code."
+            });
+        }
+
+        const updateResult = await knex("survey_templates")
             .update({
-                block_id: block_id,
                 code: code,
-                name: name,
-                location_point: (loc_point[0] === 0 && loc_point[1] === 0) ? null : knex.raw("POINT(?, ?)", [loc_point[0], loc_point[1]])
+                title: name,
+                description
             })
             .where({ id });
 
         if (updateResult) {
-            logger.info("Booths updated successfully", {
+            logger.info("Survey updated successfully", {
                 username: user_name,
-                reqdetails: "booths-editBooths",
+                reqdetails: "survey-editSurvey",
             });
             return res.status(200).json({
-                message: "Booths updated successfully",
+                message: "Survey updated successfully",
                 status: true,
             });
         } else {
-            logger.error("Booths not found or update failed", {
+            logger.error("Survey not found or update failed", {
                 username: user_name,
-                reqdetails: "booths-editBooths",
+                reqdetails: "survey-editSurvey",
             });
             return res.status(400).json({
-                message: "Booths not found or update failed",
+                message: "Survey not found or update failed",
                 status: false,
             });
         }
     } catch (error) {
-        console.error("Error updating Booths:", error);
+        console.error("Error updating Survey:", error);
         next(error);
     } finally {
         if (knex) {
@@ -221,21 +225,21 @@ export const editBooths = async (req, res, next) => {
     }
 };
 
-export const deleteBooths = async (req, res, next) => {
+export const deleteSurveyTemplate = async (req, res, next) => {
     let knex = null;
     try {
         const { id } = req.body;
         const { dbname, user_name } = req.user;
 
-        logger.info("Delete Booths Request Received", {
+        logger.info("Delete Survey Request Received", {
             username: user_name,
-            reqdetails: "booths-deleteBooths",
+            reqdetails: "survey-deleteSurvey",
         });
 
         if (!id) {
             logger.error("Mandatory fields are missing", {
                 username: user_name,
-                reqdetails: "booths-deleteBooths",
+                reqdetails: "survey-deleteSurvey",
             });
             return res.status(400).json({
                 message: "Mandatory fields are missing",
@@ -245,15 +249,15 @@ export const deleteBooths = async (req, res, next) => {
 
         knex = await createKnexInstance(dbname);
 
-        const record = await knex("booths")
+        const record = await knex("survey_templates")
             .select("*")
-            .where({ id })
+            .where({ id, active: "1" })
             .first();
 
         if (!record) {
             logger.error("Record not found", {
                 username: user_name,
-                reqdetails: "booths-deleteBooths",
+                reqdetails: "survey-deleteSurvey",
             });
             return res.status(400).json({
                 message: "Record not found",
@@ -261,31 +265,31 @@ export const deleteBooths = async (req, res, next) => {
             });
         }
 
-        const deleteRes = await knex("booths")
-            .update({ status: "1" })
+        const deleteRes = await knex("survey_templates")
+            .update({ active: "0" })
             .where({ id: id });
 
         if (deleteRes) {
-            logger.info("Booths deleted successfully", {
+            logger.info("Survey deleted successfully", {
                 username: user_name,
-                reqdetails: "booths-deleteBooths",
+                reqdetails: "survey-deleteSurvey",
             });
             return res.status(200).json({
-                message: "Booths deleted successfully",
+                message: "Survey deleted successfully",
                 status: true,
             });
         } else {
-            logger.error("Booths not found or delete failed", {
+            logger.error("Survey not found or delete failed", {
                 username: user_name,
-                reqdetails: "booths-deleteBooths",
+                reqdetails: "survey-deleteSurvey",
             });
             return res.status(400).json({
-                message: "Booths not found or delete failed",
+                message: "Survey not found or delete failed",
                 status: false,
             });
         }
     } catch (err) {
-        console.error("Error deleting Booths:", err);
+        console.error("Error deleting Survey:", err);
         next(err);
     } finally {
         if (knex) {
