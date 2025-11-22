@@ -176,7 +176,8 @@ export const addVoter = async (req, res, next) => {
 export const editVoter = async (req, res, next) => {
     let knex = null;
     try {
-        const { id, key, value } = req.body;
+        const { id, constituency_id, block_id, booth_id, part_id, voter_id, name, father_husband_name, age, gender,
+            house_no, address, phone, email, polling_station, notes, photo } = req.body;
         const { dbname, user_name } = req.user;
 
         logger.info("Edit Voter Request Received", {
@@ -184,7 +185,7 @@ export const editVoter = async (req, res, next) => {
             reqdetails: "voters-editVoter",
         });
 
-        if (!id || !key || !value) {
+        if (!id || !constituency_id || !block_id || !booth_id || !part_id || !voter_id || !name) {
             logger.error("Mandatory fields are missing for Edit Voter", {
                 username: user_name,
                 reqdetails: "voters-editVoter",
@@ -212,9 +213,26 @@ export const editVoter = async (req, res, next) => {
             });
         }
 
+        const exists2 = await knex('voters')
+            .where({ voter_id, is_active: "1" })
+            .whereNot({ id })
+            .first();
+
+        if (exists2) {
+            logger.warn("Voter ID already exists", {
+                username: user_name,
+                reqdetails: "voters-editVoter",
+            });
+            return res.status(400).json({
+                message: "Voter ID already exists",
+                status: false,
+            });
+        }
+
         let updateResult;
 
-        if (key == "photo" && value.startsWith('data:image/')) {
+        if (photo && photo.startsWith('data:image/')) {
+            const value = photo;
             const s3 = new S3Client({
                 region: process.env.AWS_REGION,
                 credentials: {
@@ -250,9 +268,46 @@ export const editVoter = async (req, res, next) => {
 
             const fileUrl = `https://${process.env.AWS_BUCKET_NAME}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
-            updateResult = await knex("voters").update({ [key]: fileUrl }).where({ id: id });
+            updateResult = await knex("voters")
+                .update({
+                    constituency_id,
+                    block_id,
+                    booth_id,
+                    part_id,
+                    voter_id,
+                    name,
+                    father_husband_name,
+                    age,
+                    gender,
+                    house_no,
+                    address,
+                    phone,
+                    email,
+                    polling_station,
+                    notes,
+                    photo: fileUrl
+                })
+                .where({ id: id });
         } else {
-            updateResult = await knex("voters").update({ [key]: value }).where({ id: id });
+            updateResult = await knex("voters")
+                .update({
+                    constituency_id,
+                    block_id,
+                    booth_id,
+                    part_id,
+                    voter_id,
+                    name,
+                    father_husband_name,
+                    age,
+                    gender,
+                    house_no,
+                    address,
+                    phone,
+                    email,
+                    polling_station,
+                    notes
+                })
+                .where({ id: id });
         }
 
         if (updateResult) {
