@@ -543,67 +543,85 @@ export const voterBulkUpload = async (req, res, next) => {
         try {
             const chunkSize = 1000;
             let insertedCount = 0;
-            let skippedDuplicates = 0;
+            let reactivatedCount = 0;
+            let skippedActive = 0;
 
             for (let i = 0; i < finalInsertData.length; i += chunkSize) {
                 const chunk = finalInsertData.slice(i, i + chunkSize);
 
-                // -----------------------------
-                // 1️⃣ Extract voter_ids in chunk
-                // -----------------------------
                 const voterIds = chunk.map(v => v.voter_id);
 
-                // -----------------------------
-                // 2️⃣ Check existing voter_ids
-                // -----------------------------
-                const existing = await trx("voters")
-                    .whereIn("voter_id", voterIds)
-                    .pluck("voter_id");
+                // Fetch existing voters with status
+                const existingRows = await trx("voters")
+                    .select("voter_id", "is_active")
+                    .whereIn("voter_id", voterIds);
 
-                // -----------------------------
-                // 3️⃣ Filter only NEW voters
-                // -----------------------------
-                const filteredChunk = chunk.filter(
-                    item => !existing.includes(item.voter_id)
+                const existingMap = new Map(
+                    existingRows.map(r => [String(r.voter_id), r.is_active])
                 );
 
-                skippedDuplicates += chunk.length - filteredChunk.length;
+                const rowsToInsert = [];
+                const rowsToReactivate = [];
 
-                // If no new data in this chunk, skip
-                if (filteredChunk.length === 0) continue;
+                for (const row of chunk) {
+                    const voterId = String(row.voter_id);
+
+                    if (existingMap.has(voterId)) {
+                        // Exists in DB
+                        const isActive = existingMap.get(voterId);
+
+                        if (isActive === 0) {
+                            // Mark for reactivation
+                            rowsToReactivate.push(voterId);
+                        } else {
+                            // Already active -> skip
+                            skippedActive++;
+                        }
+                    } else {
+                        // New voter -> insert
+                        rowsToInsert.push(row);
+                    }
+                }
 
                 // -----------------------------
-                // 4️⃣ Insert clean chunk
+                // 1️⃣ Reactivate inactive voters
                 // -----------------------------
-                await trx("voters").insert(filteredChunk);
-                insertedCount += filteredChunk.length;
+                if (rowsToReactivate.length > 0) {
+                    await trx("voters")
+                        .whereIn("voter_id", rowsToReactivate)
+                        .update({ is_active: 1 });
+
+                    reactivatedCount += rowsToReactivate.length;
+                }
+
+                // -----------------------------
+                // 2️⃣ Insert new voters
+                // -----------------------------
+                if (rowsToInsert.length > 0) {
+                    await trx("voters").insert(rowsToInsert);
+                    insertedCount += rowsToInsert.length;
+                }
             }
 
             await trx.commit();
 
-            logger.info("Voters inserted successfully", {
-                reqdetails: "voter-bulk-upload",
-                inserted: insertedCount,
-                skipped: skippedDuplicates
-            });
-
             return res.status(200).json({
                 status: true,
-                message: "Voters processed successfully",
+                message: "Voter upload processed successfully",
                 inserted: insertedCount,
-                skipped_duplicates: skippedDuplicates
+                reactivated: reactivatedCount,
+                skipped_active_existing: skippedActive
             });
 
         } catch (dbErr) {
             await trx.rollback();
-            logger.error("Insert failed", { error: dbErr.message });
-
-            return res.status(400).json({
+            return res.status(500).json({
                 status: false,
                 message: "Database insert error",
                 error: dbErr.message
             });
         }
+
     } catch (error) {
         logger.error("Error in voter bulk upload", {
             error: error.message,
