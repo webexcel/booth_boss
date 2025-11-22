@@ -158,7 +158,7 @@ export const addVoter = async (req, res, next) => {
                 username: user_name,
                 reqdetails: "voters-addVoter",
             });
-            return res.status(500).json({
+            return res.status(400).json({
                 message: "Failed to insert Voter",
                 status: false,
             });
@@ -415,15 +415,17 @@ export const voterBulkUpload = async (req, res, next) => {
 
         const existingIds = existingVoters.map((v) => v.voter_id);
 
-        // Only new voter IDs
         const newVoterIds = requestedVoterIds.filter(
             (id) => !existingIds.includes(id)
         );
 
-        // Final Data to Insert
         const insertData = sheetData.filter((i) =>
             newVoterIds.includes(i.voter_id)
         );
+
+        for (const i of insertData) {
+            await validateForeignKeys(knex, i);
+        }
 
         logger.info("Preparing voter data for insert", {
             username: user_name,
@@ -438,6 +440,84 @@ export const voterBulkUpload = async (req, res, next) => {
             });
         }
 
+        // Collect unique FK IDs
+        const requestedConstituencies = [...new Set(insertData.map(r => r.constituency_id).filter(v => v))].map(Number);
+        const requestedBlocks = [...new Set(insertData.map(r => r.block_id).filter(v => v))].map(Number);
+        const requestedBooths = [...new Set(insertData.map(r => r.booth_id).filter(v => v))].map(Number);
+        const requestedParts = [...new Set(insertData.map(r => r.part_id).filter(v => v))].map(Number);
+
+        // Fetch all existing FK rows
+        const [
+            existingConstituencies,
+            existingBlocks,
+            existingBooths,
+            existingParts
+        ] = await Promise.all([
+            requestedConstituencies.length
+                ? knex("constituencies").whereIn("id", requestedConstituencies).pluck("id")
+                : Promise.resolve([]),
+
+            requestedBlocks.length
+                ? knex("blocks").whereIn("id", requestedBlocks).pluck("id")
+                : Promise.resolve([]),
+
+            requestedBooths.length
+                ? knex("booths").whereIn("id", requestedBooths).pluck("id")
+                : Promise.resolve([]),
+
+            requestedParts.length
+                ? knex("parts").whereIn("id", requestedParts).pluck("id")
+                : Promise.resolve([]),
+        ]);
+
+        const setCon = new Set(existingConstituencies.map(Number));
+        const setBlock = new Set(existingBlocks.map(Number));
+        const setBooth = new Set(existingBooths.map(Number));
+        const setPart = new Set(existingParts.map(Number));
+
+        // Validate each row
+        const fkInvalidRows = [];
+        const rowsToInsert = [];
+
+        for (const [idx, row] of insertData.entries()) {
+            const issues = [];
+
+            const cId = row.constituency_id ? Number(row.constituency_id) : null;
+            const bId = row.block_id ? Number(row.block_id) : null;
+            const boothId = row.booth_id ? Number(row.booth_id) : null;
+            const partId = row.part_id ? Number(row.part_id) : null;
+
+            if (cId && !setCon.has(cId)) issues.push(`constituency_id ${cId} not found`);
+            if (bId && !setBlock.has(bId)) issues.push(`block_id ${bId} not found`);
+            if (boothId && !setBooth.has(boothId)) issues.push(`booth_id ${boothId} not found`);
+            if (partId && !setPart.has(partId)) issues.push(`part_id ${partId} not found`);
+
+            if (issues.length) {
+                fkInvalidRows.push({
+                    rowIndex: idx + 2,   // Excel row number (header +1)
+                    voter_id: row.voter_id,
+                    issues
+                });
+            } else {
+                rowsToInsert.push(row);
+            }
+        }
+
+        // If FK validation failed, stop process
+        if (fkInvalidRows.length > 0) {
+            logger.error("FK validation failed for upload", {
+                reqdetails: "voter-bulk-upload",
+                fkInvalidRowsCount: fkInvalidRows.length
+            });
+
+            return res.status(400).json({
+                status: false,
+                message: "Foreign key validation failed for some rows. Fix and re-upload.",
+                fkInvalidRows
+            });
+        }
+
+        // Prepare data
         const finalInsertData = insertData.map((i) => ({
             constituency_id: i.constituency_id,
             block_id: i.block_id,
@@ -457,27 +537,111 @@ export const voterBulkUpload = async (req, res, next) => {
             notes: i.notes || null,
         }));
 
-        const insertResult = await knex("voters").insert(finalInsertData);
+        // Insert using transaction
+        const trx = await knex.transaction();
 
-        logger.info("Voters created successfully", {
-            username: user_name,
-            count: finalInsertData.length,
-            reqdetails: "voter-bulk-upload",
-        });
+        try {
+            const chunkSize = 1000;
+            let insertedCount = 0;
+            let skippedDuplicates = 0;
 
-        return res.status(200).json({
-            message: "Voters created successfully",
-            status: true,
-            inserted: finalInsertData.length,
-        });
+            for (let i = 0; i < finalInsertData.length; i += chunkSize) {
+                const chunk = finalInsertData.slice(i, i + chunkSize);
 
+                // -----------------------------
+                // 1️⃣ Extract voter_ids in chunk
+                // -----------------------------
+                const voterIds = chunk.map(v => v.voter_id);
+
+                // -----------------------------
+                // 2️⃣ Check existing voter_ids
+                // -----------------------------
+                const existing = await trx("voters")
+                    .whereIn("voter_id", voterIds)
+                    .pluck("voter_id");
+
+                // -----------------------------
+                // 3️⃣ Filter only NEW voters
+                // -----------------------------
+                const filteredChunk = chunk.filter(
+                    item => !existing.includes(item.voter_id)
+                );
+
+                skippedDuplicates += chunk.length - filteredChunk.length;
+
+                // If no new data in this chunk, skip
+                if (filteredChunk.length === 0) continue;
+
+                // -----------------------------
+                // 4️⃣ Insert clean chunk
+                // -----------------------------
+                await trx("voters").insert(filteredChunk);
+                insertedCount += filteredChunk.length;
+            }
+
+            await trx.commit();
+
+            logger.info("Voters inserted successfully", {
+                reqdetails: "voter-bulk-upload",
+                inserted: insertedCount,
+                skipped: skippedDuplicates
+            });
+
+            return res.status(200).json({
+                status: true,
+                message: "Voters processed successfully",
+                inserted: insertedCount,
+                skipped_duplicates: skippedDuplicates
+            });
+
+        } catch (dbErr) {
+            await trx.rollback();
+            logger.error("Insert failed", { error: dbErr.message });
+
+            return res.status(400).json({
+                status: false,
+                message: "Database insert error",
+                error: dbErr.message
+            });
+        }
     } catch (error) {
         logger.error("Error in voter bulk upload", {
             error: error.message,
             reqdetails: "voter-bulk-upload",
         });
-        next(error);
+        return res.status(400).json({
+            status: false,
+            message: "Unexpected server error",
+            error: error.message,
+        });
     } finally {
-        if (knex) knex.destroy();
+        if (knex) {
+            await knex.destroy();
+        }
     }
 };
+
+async function validateForeignKeys(knex, item) {
+    const constituency = await knex("constituencies")
+        .where("id", item.constituency_id)
+        .first();
+
+    const block = await knex("blocks")
+        .where("id", item.block_id)
+        .first();
+
+    const booth = await knex("booths")
+        .where("id", item.booth_id)
+        .first();
+
+    const part = await knex("parts")
+        .where("id", item.part_id)
+        .first();
+
+    if (!constituency) throw new Error(`Invalid constituency_id: ${item.constituency_id}`);
+    if (!block) throw new Error(`Invalid block_id: ${item.block_id}`);
+    if (!booth) throw new Error(`Invalid booth_id: ${item.booth_id}`);
+    if (!part) throw new Error(`Invalid part_id: ${item.part_id}`);
+
+    return true;
+}
