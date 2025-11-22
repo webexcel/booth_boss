@@ -229,6 +229,32 @@ export const editVoter = async (req, res, next) => {
             });
         }
 
+        const cons = await knex("constituencies").select("*").where("id", constituency_id).first();
+        const block = await knex("blocks").select("*").where("id", block_id).first();
+        const booth = await knex("booths").select("*").where("id", booth_id).first();
+        const part = await knex("parts").select("*").where("id", part_id).first();
+
+        const validations = [
+            { key: "cons", value: cons, message: "Constituency ID is not valid" },
+            { key: "block", value: block, message: "Block ID is not valid" },
+            { key: "booth", value: booth, message: "Booth ID is not valid" },
+            { key: "part", value: part, message: "Part ID is not valid" }
+        ];
+
+        for (const v of validations) {
+            switch (true) {
+                case !v.value:
+                    logger.error(v.message, {
+                        username: user_name,
+                        reqdetails: "voters-editVoter",
+                    });
+                    return res.status(400).json({
+                        message: v.message,
+                        status: false,
+                    });
+            }
+        }
+
         let updateResult;
 
         if (photo && photo.startsWith('data:image/')) {
